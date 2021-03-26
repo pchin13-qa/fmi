@@ -1,0 +1,227 @@
+# https://medium.com/devoops-and-universe/selenium-grid-deployment-by-cloudformation-ansible-98a7fdf14c68
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Docker host
+
+# ------------------------------------------------------------------------------
+# Parameters
+# ------------------------------------------------------------------------------
+Parameters:
+  Env:
+    Type: String
+    Description: Environment name to add as suffix to instance name.
+
+  InstanceType:
+    Type: String
+    Description: Instance type.
+    AllowedValues:
+    - m5.large
+    - m5.xlarge
+    - m5.2xlarge
+    - c5.xlarge
+    - c5.large
+    Default: m5.xlarge
+
+  VPC:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID.
+    Default: vpc-12345
+
+  SecurityGroups:
+    Type: List<AWS::EC2::SecurityGroup::Id>
+    Description: Uses private SecurityGroup.
+    Default: 'sg-12345,sg-123456'
+
+  PrivateSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnets where Host should be deployed.
+    Default: subnet-12345
+
+# ------------------------------------------------------------------------------
+# Mappings
+# ------------------------------------------------------------------------------
+Mappings:
+  AMI:
+    us-west-2:
+      # Amazon Linux 2 (amzn2-ami-hvm-2.0.20190313-x86_64-gp2)
+      HVM: ami-061392db613a6357b
+    eu-west-1:
+      # Amazon Linux 2 (amzn2-ami-hvm-2.0.20190313-x86_64-gp2)
+      HVM: ami-07683a44e80cd32c5
+    ap-south-1:
+      # Amazon Linux 2 (amzn2-ami-hvm-2.0.20190313-x86_64-gp2)
+      HVM: ami-0889b8a448de4fc44
+
+# ------------------------------------------------------------------------------
+# Resources
+# ------------------------------------------------------------------------------
+Resources:
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: !Ref PrivateSubnets
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 900
+      LaunchConfigurationName: !Ref LaunchConfig
+      LoadBalancerNames:
+        - !Ref LoadBalancer
+      DesiredCapacity: 1
+      MaxSize: 1
+      MinSize: 1
+      Tags:
+      - { Key: 'Name', Value: !Sub 'docker-selenium-${Env}', PropagateAtLaunch: true }
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancing::LoadBalancer
+    Properties:
+      Scheme: internal
+      Subnets: !Ref PrivateSubnets
+      Listeners:
+        - LoadBalancerPort: '9000'
+          InstancePort: '9000'
+          Protocol: HTTP
+        - LoadBalancerPort: '4444'
+          InstancePort: '4444'
+          Protocol: HTTP
+        - LoadBalancerPort: '4445'
+          InstancePort: '4445'
+          Protocol: HTTP
+        - LoadBalancerPort: '5900'
+          InstancePort: '5900'
+          Protocol: TCP
+        - LoadBalancerPort: '2376'
+          InstancePort: '2376'
+          Protocol: TCP
+      SecurityGroups: !Ref SecurityGroups
+      Tags:
+        - Key: env
+          Value: docker
+  DNS:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneName: example.com.
+      Comment: Zone apex alias targeted to LoadBalancer.
+      RecordSets:
+        - Name: selenium.example.com.
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneNameID
+            DNSName: !GetAtt LoadBalancer.DNSName
+  LaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !FindInMap [AMI, !Ref 'AWS::Region', HVM]
+      KeyName: cl-dev
+      IamInstanceProfile: !Ref InstanceProfile
+      AssociatePublicIpAddress: false
+      InstanceMonitoring: false
+      InstanceType: !Ref InstanceType
+      SecurityGroups: !Ref SecurityGroups
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+
+            # The bootstrap log can be found at:
+            # /var/log/cloud-init-output.log
+            # /var/log/cloud-init.log
+
+            # The following code will be placed into file on instance and executed:
+            # /var/lib/cloud/instance/scripts/part-001
+
+            # Exit on error, treat unset variables as error and trace commands
+            set -e
+            set -u
+            set -x
+
+            # ------------------------------------------------------------------------------
+            # Common part for Amazon Linux setup on AWS EC2
+            # ------------------------------------------------------------------------------
+
+            # Install latest security updates
+            yum update -y
+            yum install -y yum-utils \
+            device-mapper-persistent-data \
+            lvm2 \
+            python-pip \
+            docker \
+            mc
+
+            service docker start
+
+            pip install ansible
+
+            aws s3 cp --recursive s3://ansible-bucket-name /opt/ansible
+
+            # Set hostname
+            INSTANCE_ID=$(curl -s 169.254.169.254/latest/meta-data/instance-id)
+            HOSTNAME="selenuim-${Env}-${!INSTANCE_ID#i-}.localdomain"
+            hostname "$HOSTNAME"
+            echo "$(hostname -I) docker-selenium-${Env} $HOSTNAME" >> /etc/hosts
+
+            /usr/bin/ansible-playbook -i /opt/ansible/hosts /opt/ansible/docker.yml
+
+  # ----------------------------------------------------------------------------
+  # Instance Profile and Role
+  # ----------------------------------------------------------------------------
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /Your_PATH/
+      Roles: [!Ref InstanceRole]
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Action: ['sts:AssumeRole']
+          Principal:
+            Service: ['ec2.amazonaws.com']
+      Path: /Your_PATH/
+      Policies:
+      - PolicyName: AWSPermissions
+        PolicyDocument:
+          Statement:
+            # Allow read operations in S3 buckets
+            - Sid: S3ReadWrite
+              Effect: Allow
+              Action:
+              - s3:ListBucket
+              - s3:GetObject
+              Resource:
+              - arn:aws:s3:::ansible-bucket-name
+              - arn:aws:s3:::ansible-bucket-name/*
+            - Sid: ASGRead
+              Effect: Allow
+              Action:
+              - autoscaling:DescribeAutoScalingGroups
+              Resource:
+              - "*"
+            - Sid: ELBRead
+              Effect: Allow
+              Action:
+              - elasticloadbalancing:DescribeLoadBalancers
+              - elasticloadbalancing:DescribeTags
+              - elasticloadbalancing:DescribeInstanceHealth
+              - elasticloadbalancing:DescribeLoadBalancerAttributes
+              Resource:
+              - "*"
+            - Sid: DNSRead
+              Effect: Allow
+              Action:
+              - route53:GetHostedZone
+              - route53:ListResourceRecordSets
+              Resource:
+              - "*"
+            - Sid: CFRead
+              Effect: Allow
+              Action:
+              - cloudformation:DescribeStacks
+              - cloudformation:ListStackResources
+              - cloudformation:GetTemplate
+              - cloudformation:GetStackPolicy
+              - cloudformation:DescribeStackEvents
+              Resource:
+              - "*"

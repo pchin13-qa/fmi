@@ -1,0 +1,10 @@
+FROM openjdk:8
+#FROM openjdk:8-jdk-alpine
+#FROM selenium/standalone-chrome
+COPY fmiLoginTest_runnable_remote.jar chromedriver geckodriver /app/
+RUN mkdir /app/fmiLoginTest_runnable_lib/
+COPY fmiLoginTest_runnable_lib/ /app/fmiLoginTest_runnable_lib/
+WORKDIR /app/
+ENV JAVA_OPTS=""
+#ENV JAVA_OPTS="-verbose"
+ENTRYPOINT [ "sh", "-c", "java $JAVA_OPTS -jar fmiLoginTest_runnable_remote.jar " ]

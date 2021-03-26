@@ -1,0 +1,19 @@
+Metadata:
+  'AWS::CloudFormation::Designer':
+    ac297764-a9b7-49ac-adfc-d7116d8aef84:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: -136.16666666666666
+        'y': -14.666666666666666
+      z: 0
+Resources:
+  dockerMachine:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      InstanceType: t1.micro
+      ImageId: ami-003634241a8fcdec0
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: ac297764-a9b7-49ac-adfc-d7116d8aef84

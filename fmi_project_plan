@@ -1,0 +1,50 @@
+Project Plan for Java Selenium Automation in AWS CloudFormation
+
+1. Write TestNG Selenium tests in Eclipse
+    - Main method to execute tests (needed in jar)
+    - Separate tests for Firefox (RemoteWebDriver) and Chrome (WebDriver) to login, search, click, logout
+2. Use local Selenium Grid on laptop to execute tests
+    - This runs on the local Macbook and I can observe tests from the grid console: http://localhost:4444/grid/console 
+3. Create executable jar file from Eclipse
+    - This works when I execute the jar file on my Mac because the environment must be set up properly. 
+4. Dockerize jar file into docker image
+    - This works using openjdk:8 as long as we use a RemoteWebDriver (see step #5).
+    - If you use a local Webdriver, this fails because Selenium is not set up properly in the base image.
+5. Spin up a Selenium Grid in AWS CloudFormation
+    - I did this by hand using EC2 and docker-compose with a selenium-hub and Firefox and Chrome nodes
+    - Need to expose tcp port 4444 via security group to access from external entity.
+    - http://ec2-3-142-238-242.us-east-2.compute.amazonaws.com:4444/wd/hub
+    - At high level need application load balancer to handle incoming requests, hub, nodes.
+    ? Could be created as part of the stack in Step #6 below, though need to do cost analysis of keeping Grid up vs. on-demand creation.
+
+6. Spin up a CloudFormation Stack to drive docker tests
+    - Found stack that creates network and services for docker images
+    - Found simple stack that downloads docker on EC2 t2.micro:  containers_on_aws_stack.yml
+    - An alternative solution is to use FARGATE to spin up serverless docker VMs:  https://aws.amazon.com/fargate/
+    - The idea is to create this stack to execute docker image created in step #4, point tests to Selenium Grid in Step #5
+    - In addition, can use TaskCat to test the infrastructure is spun up correctly
+    ? Didn't spin up beacuse of costs.  Did try the LAMP stack though which successfully deployed.
+
+7. Obtain reports and traceability from AWS CloudFormation
+    - Reporting - Use AWS::CodeBuild::ReportGroup
+    - Traceability - Upload results to S3 bucket
+    - See example AWS template here:  https://docs.aws.amazon.com/codebuild/latest/userguide/test-report-group-create-cfn.html
+
+Resources:
+  CodeBuildReportGroup:
+    Type: AWS::CodeBuild::ReportGroup
+    Properties:
+      Name: my-report-group-name
+      Type: TEST
+      ExportConfig:
+        ExportConfigType: S3
+        S3Destination:
+          Bucket: my-s3-bucket-name
+          Path: path-to-folder-for-exported-files
+          Packaging: ZIP
+          EncryptionKey: my-KMS-encryption-key
+          EncryptionDisabled: false
+
+
+ALTERNATIVE STRATEGIES
+- Use AWS CodeBuild for a complete CI pipeline (build --> test --> package)
